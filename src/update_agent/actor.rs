@@ -19,6 +19,10 @@ lazy_static::lazy_static! {
         "zincati_update_agent_last_refresh_timestamp",
         "UTC timestamp of update-agent last refresh tick."
     )).unwrap();
+    static ref LOCAL_DEPLOYMENTS_NUMBER: IntGauge = register_int_gauge!(opts!(
+        "zincati_local_deployments_number",
+        "The number of local deployments on startup."
+    )).unwrap();
     static ref UPDATES_ENABLED: IntGauge = register_int_gauge!(opts!(
         "zincati_update_agent_updates_enabled",
         "Whether auto-updates logic is enabled."
@@ -164,7 +168,41 @@ impl UpdateAgent {
             Ok(())
         });
 
+        self.check_local_deployments();
+
         Box::new(initialization)
+    }
+
+    //check the local deployments on startup
+    fn check_local_deployments(&mut self) {
+        self
+            .local_deployments()
+            .then(|res, actor, _ctx|{
+                let release = match res {
+                    Ok(deploys) => {
+                        let current_os = &actor.identity.current_os;
+                        if !deploys.contains(current_os) {
+                            log::error!("didn't find the booted machine");
+                        }
+
+                        if deploys.len()==1 {
+                            log::error!("only the booted machine exists locally");
+                        }
+
+                        let number_deployment = deploys.len()-1;
+                        LOCAL_DEPLOYMENTS_NUMBER.set(number_deployment as i64);
+                        log::info!("found {} other deployments locally", number_deployment);
+
+                        for release in &deploys {
+                            if release.version == current_os.version {
+                                continue;
+                            }
+
+                            log::info!("deployment {} is available", release.version)
+                        }
+                    }
+                };
+            });
     }
 
     /// Try to report steady state.
